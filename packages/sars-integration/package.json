@@ -1,0 +1,14 @@
+{
+  "name": "@qb-toolkit/sars-integration",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@qb-toolkit/core": "*"
+  }
+}

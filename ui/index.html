@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QB Toolkit</title>
+  <style>
+    :root {
+      --bg: #f8f9fa;
+      --surface: #ffffff;
+      --border: #dee2e6;
+      --text: #212529;
+      --text-muted: #6c757d;
+      --primary: #0d6efd;
+      --success: #198754;
+      --warning: #ffc107;
+      --danger: #dc3545;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .app {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 32px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid var(--border);
+    }
+
+    header h1 { font-size: 24px; font-weight: 600; }
+
+    .nav {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+
+    .nav button {
+      padding: 8px 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .nav button.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    /* Steps indicator */
+    .steps {
+      display: flex;
+      gap: 0;
+      margin-bottom: 24px;
+    }
+
+    .step {
+      flex: 1;
+      text-align: center;
+      padding: 12px 16px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+      position: relative;
+    }
+
+    .step:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+    .step:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+    .step + .step { border-left: none; }
+
+    .step.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    .step.completed {
+      background: #d1e7dd;
+      color: #0f5132;
+      border-color: #a3cfbb;
+    }
+
+    .step-num {
+      display: inline-block;
+      width: 22px;
+      height: 22px;
+      line-height: 22px;
+      border-radius: 50%;
+      background: var(--border);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+
+    .step.active .step-num { background: rgba(255,255,255,0.3); color: white; }
+    .step.completed .step-num { background: var(--success); color: white; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+
+    .card h2 {
+      font-size: 18px;
+      margin-bottom: 16px;
+    }
+
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 48px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--primary);
+      background: #e7f1ff;
+    }
+
+    .drop-zone p { color: var(--text-muted); margin-top: 8px; font-size: 14px; }
+
+    .file-input { display: none; }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat {
+      text-align: center;
+      padding: 16px;
+      border-radius: var(--radius);
+      background: var(--bg);
+    }
+
+    .stat .value { font-size: 32px; font-weight: 700; }
+
+    .stat .label {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .stat.matched .value { color: var(--success); }
+    .stat.unmatched .value { color: var(--danger); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 2px solid var(--border);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    tr:hover td { background: var(--bg); }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .badge.matched { background: #d1e7dd; color: #0f5132; }
+    .badge.unmatched { background: #f8d7da; color: #842029; }
+
+    .amount { font-variant-numeric: tabular-nums; text-align: right; }
+    .amount.debit { color: var(--danger); }
+    .amount.credit { color: var(--success); }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    button.btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-secondary { background: var(--border); color: var(--text); }
+    .btn-success { background: var(--success); color: white; }
+
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .empty {
+      text-align: center;
+      padding: 48px;
+      color: var(--text-muted);
+    }
+
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .filter-bar button {
+      padding: 4px 12px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--surface);
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .filter-bar button.active {
+      background: var(--text);
+      color: white;
+      border-color: var(--text);
+    }
+
+    select.gl-select {
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 13px;
+      min-width: 200px;
+    }
+
+    select.gl-select:focus { border-color: var(--primary); outline: none; }
+
+    .done-check {
+      display: inline-block;
+      width: 64px;
+      height: 64px;
+      line-height: 64px;
+      border-radius: 50%;
+      background: #d1e7dd;
+      color: var(--success);
+      font-size: 32px;
+      text-align: center;
+      margin-bottom: 16px;
+    }
+
+    #page-bank-recon, #page-eft, #page-sars { display: none; }
+    #page-bank-recon.active, #page-eft.active, #page-sars.active { display: block; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>QB Toolkit</h1>
+      <div class="nav">
+        <button class="active" data-page="bank-recon">Bank Recon</button>
+        <button data-page="eft">EFT Generator</button>
+        <button data-page="sars">SARS Filing</button>
+      </div>
+    </header>
+
+    <div id="page-bank-recon" class="active">
+
+      <div class="steps">
+        <div class="step active" data-step="upload">
+          <span class="step-num">1</span> Upload
+        </div>
+        <div class="step" data-step="review">
+          <span class="step-num">2</span> Review Matches
+        </div>
+        <div class="step" data-step="categorise">
+          <span class="step-num">3</span> Categorise
+        </div>
+        <div class="step" data-step="confirm">
+          <span class="step-num">4</span> Confirm
+        </div>
+        <div class="step" data-step="done">
+          <span class="step-num">5</span> Done
+        </div>
+      </div>
+
+      <!-- Step 1: Upload -->
+      <div class="card" id="upload-card">
+        <h2>Import Bank Statement</h2>
+        <div class="drop-zone" id="drop-zone">
+          <strong>Drop bank statement here</strong>
+          <p>CSV or OFX/QFX files from FNB, Standard Bank, Nedbank, ABSA, or Capitec</p>
+          <input type="file" class="file-input" id="file-input" accept=".csv,.ofx,.qfx">
+        </div>
+        <div style="margin-top: 16px; text-align: center;">
+          <button class="btn btn-secondary" id="btn-sample">Load Sample FNB Statement</button>
+          <span style="color: var(--text-muted); font-size: 13px; margin-left: 8px;">14 transactions with mock QB data</span>
+        </div>
+      </div>
+
+      <!-- Step 2: Review Matches -->
+      <div class="card" id="review-card" style="display: none;">
+        <h2>Review Matches <span id="review-bank" style="font-size: 13px; color: var(--text-muted); font-weight: 400; margin-left: 8px;"></span></h2>
+        <div class="summary" id="review-summary"></div>
+
+        <div class="filter-bar" id="review-filter">
+          <button class="active" data-filter="all">All</button>
+          <button data-filter="matched">Matched</button>
+          <button data-filter="unmatched">New</button>
+        </div>
+
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th class="amount">Amount</th>
+                <th>Action</th>
+                <th>QB Transaction</th>
+              </tr>
+            </thead>
+            <tbody id="review-body"></tbody>
+          </table>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" id="btn-to-categorise">
+            Next: Categorise New Transactions
+          </button>
+          <button class="btn btn-secondary" id="btn-export">Export CSV</button>
+          <button class="btn btn-secondary" id="btn-reset">Start Over</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Categorise -->
+      <div class="card" id="categorise-card" style="display: none;">
+        <h2>Assign GL Accounts</h2>
+        <p style="color: var(--text-muted); margin-bottom: 16px;">
+          These transactions don't exist in QuickBooks yet. Assign each one to a GL account — they'll be created and marked as cleared.
+        </p>
+
+        <div class="actions" style="margin-top: 0; margin-bottom: 16px;">
+          <button class="btn btn-secondary" id="btn-accept-suggestions">Accept All Suggestions</button>
+        </div>
+
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th class="amount">Amount</th>
+                <th>GL Account</th>
+                <th>Suggestion</th>
+              </tr>
+            </thead>
+            <tbody id="categorise-body"></tbody>
+          </table>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" id="btn-to-confirm" disabled>
+            Next: Review & Confirm
+          </button>
+          <button class="btn btn-secondary" id="btn-back-review">Back to Review</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Confirm -->
+      <div class="card" id="confirm-card" style="display: none;">
+        <h2>Confirm Reconciliation</h2>
+        <p style="color: var(--text-muted); margin-bottom: 16px;">
+          Review everything below. Once you hit Reconcile, these changes will be pushed to QuickBooks.
+        </p>
+
+        <div class="summary" id="confirm-summary"></div>
+
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th class="amount">Amount</th>
+                <th>Action</th>
+                <th>QB Match / GL Account</th>
+              </tr>
+            </thead>
+            <tbody id="confirm-body"></tbody>
+          </table>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-success" id="btn-reconcile">
+            Reconcile All
+          </button>
+          <button class="btn btn-secondary" id="btn-back-categorise">Back</button>
+        </div>
+      </div>
+
+      <!-- Step 5: Done -->
+      <div class="card" id="done-card" style="display: none; text-align: center;">
+        <div class="done-check">&#10003;</div>
+        <h2>Reconciliation Complete</h2>
+        <p style="color: var(--text-muted); margin-bottom: 24px;">
+          All transactions have been matched, created, and marked as cleared in QuickBooks.
+        </p>
+
+        <div class="summary" id="done-summary"></div>
+
+        <div style="overflow-x: auto; text-align: left;" id="done-detail-wrap">
+          <h3 style="font-size: 14px; margin-bottom: 8px; color: var(--text-muted);">New Transactions Created</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th class="amount">Amount</th>
+                <th>GL Account</th>
+              </tr>
+            </thead>
+            <tbody id="done-detail"></tbody>
+          </table>
+        </div>
+
+        <div class="actions" style="justify-content: center; margin-top: 24px;">
+          <button class="btn btn-primary" id="btn-new">Reconcile Another Statement</button>
+        </div>
+      </div>
+
+    </div>
+
+    <div id="page-eft">
+      <div class="card">
+        <div class="empty">
+          <h2>EFT Payment File Generator</h2>
+          <p>Generate bank-specific EFT batch payment files from QuickBooks outstanding payables.</p>
+          <p style="margin-top: 8px;">Coming in Phase 2.</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-sars">
+      <div class="card">
+        <div class="empty">
+          <h2>SARS E-Filing Integration</h2>
+          <p>Extract VAT201, EMP201, and IRP5 data from QuickBooks for SARS eFiling.</p>
+          <p style="margin-top: 8px;">Coming in Phase 3.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "@qb-toolkit/ui",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@qb-toolkit/core": "*",
+    "@qb-toolkit/bank-recon": "*"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
+  }
+}
