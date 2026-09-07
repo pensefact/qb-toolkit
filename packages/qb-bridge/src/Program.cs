@@ -55,10 +55,21 @@ namespace QBBridge
             var req = context.Request;
             var res = context.Response;
 
-            // CORS for local dev
-            res.Headers.Add("Access-Control-Allow-Origin", "*");
-            res.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            res.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
+            // Only allow requests from localhost origins (prevents DNS rebinding and cross-origin access)
+            string origin = req.Headers["Origin"];
+            if (!IsLocalOrigin(origin) && !IsLocalHost(req.Url.Host))
+            {
+                res.StatusCode = 403;
+                res.Close();
+                return;
+            }
+
+            if (origin != null && IsLocalOrigin(origin))
+            {
+                res.Headers.Add("Access-Control-Allow-Origin", origin);
+                res.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+                res.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
+            }
 
             if (req.HttpMethod == "OPTIONS")
             {
@@ -83,7 +94,7 @@ namespace QBBridge
                 {
                     HandleBatch(req, res);
                 }
-                else if (path == "/close" && req.HttpMethod == "GET")
+                else if (path == "/close" && req.HttpMethod == "POST")
                 {
                     HandleClose(res);
                 }
@@ -202,6 +213,19 @@ namespace QBBridge
         static string Escape(string s)
         {
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "");
+        }
+
+        static bool IsLocalOrigin(string origin)
+        {
+            if (string.IsNullOrEmpty(origin)) return false;
+            Uri uri;
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out uri)) return false;
+            return IsLocalHost(uri.Host);
+        }
+
+        static bool IsLocalHost(string host)
+        {
+            return host == "localhost" || host == "127.0.0.1" || host == "::1";
         }
     }
 }

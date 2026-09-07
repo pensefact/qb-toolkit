@@ -53,6 +53,6 @@ export class QBBridgeClient {
   }
 
   async close(): Promise<void> {
-    await fetch(`${this.baseUrl}/close`);
+    await fetch(`${this.baseUrl}/close`, { method: "POST" });
   }
 }
