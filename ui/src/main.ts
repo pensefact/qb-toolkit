@@ -1,13 +1,10 @@
-import { parseStatement, parseOFX } from "@qb-toolkit/bank-recon";
-import { matchTransactions } from "@qb-toolkit/core";
-import type { BankStatement, MatchResult, ReconAction } from "@qb-toolkit/core";
-import {
-  MOCK_BANK_ACCOUNTS,
-  MOCK_GL_ACCOUNTS,
-  findAccountByNumber,
-  getTransactionsForAccount,
-  suggestGLAccount,
-} from "./mock-qb.js";
+import { parseCSVStatement, parseOFX, planActions, generateRequests } from "@qb-toolkit/bank-recon";
+import { matchInvoices, matchBills, matchTransactions } from "@qb-toolkit/core";
+import type { BankStatement, ReconAction, Transaction, InvoiceMatch, BillMatch } from "@qb-toolkit/core";
+import type { ActionPlan } from "@qb-toolkit/bank-recon";
+import { mockProvider, suggestGLAccount, getGLAccounts } from "./mock-provider.js";
+import { findAccountByNumber } from "./qb-provider.js";
+import type { QBDataProvider } from "./qb-provider.js";
 
 const BANK_NAMES: Record<string, string> = {
   fnb: "First National Bank",
@@ -17,13 +14,17 @@ const BANK_NAMES: Record<string, string> = {
   capitec: "Capitec",
 };
 
-let currentResults: MatchResult[] = [];
+// State
 let currentStatement: BankStatement | null = null;
-let reconActions: ReconAction[] = [];
+let currentPlan: ActionPlan | null = null;
 let activeFilter = "all";
 let currentStep: "upload" | "review" | "categorise" | "confirm" | "done" = "upload";
 
-// Navigation
+// Use mock provider until COM bridge is available
+const provider: QBDataProvider = mockProvider;
+
+// ── Navigation ──
+
 document.querySelectorAll<HTMLButtonElement>(".nav button").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".nav button").forEach((b) => b.classList.remove("active"));
@@ -33,7 +34,8 @@ document.querySelectorAll<HTMLButtonElement>(".nav button").forEach((btn) => {
   });
 });
 
-// Drop zone
+// ── File handling ──
+
 const dropZone = document.getElementById("drop-zone")!;
 const fileInput = document.getElementById("file-input") as HTMLInputElement;
 
@@ -53,62 +55,96 @@ fileInput.addEventListener("change", () => {
 
 document.getElementById("btn-sample")?.addEventListener("click", async () => {
   const resp = await fetch("/samples/fnb-sample.csv");
-  processContent(await resp.text(), false);
+  await processCSV(await resp.text(), false);
 });
 
 function handleFile(file: File) {
-  const reader = new FileReader();
-  reader.onload = () => {
-    const isOFX = /\.(ofx|qfx)$/i.test(file.name);
-    processContent(reader.result as string, isOFX);
-  };
-  reader.readAsText(file);
+  const isPDF = /\.pdf$/i.test(file.name);
+  const isOFX = /\.(ofx|qfx)$/i.test(file.name);
+
+  if (isPDF) {
+    const reader = new FileReader();
+    reader.onload = () => processPDF(reader.result as ArrayBuffer);
+    reader.readAsArrayBuffer(file);
+  } else {
+    const reader = new FileReader();
+    reader.onload = () => processCSV(reader.result as string, isOFX);
+    reader.readAsText(file);
+  }
 }
 
-function processContent(content: string, isOFX: boolean) {
+async function processCSV(content: string, isOFX: boolean) {
   try {
-    currentStatement = isOFX ? parseOFX(content) : parseStatement(content);
-    const account = findAccountByNumber(currentStatement.accountNumber);
-    const qbTxns = account ? getTransactionsForAccount(account.listId) : [];
-    currentResults = matchTransactions(currentStatement.transactions, qbTxns);
-    buildReconActions();
-    showStep("review");
+    const statement = isOFX ? parseOFX(content) : parseCSVStatement(content);
+    await processStatement(statement);
   } catch (err) {
     alert(`Error parsing file: ${(err as Error).message}`);
   }
 }
 
-function buildReconActions() {
-  reconActions = currentResults.map((r) => {
-    if (r.status === "matched" && r.qbTxn) {
-      return {
-        type: "clear" as const,
-        bankTxn: r.bankTxn,
-        qbTxn: r.qbTxn,
-        confirmed: true,
-      };
-    }
-    const suggestedId = suggestGLAccount(r.bankTxn.description);
-    const suggested = suggestedId
-      ? MOCK_GL_ACCOUNTS.find((a) => a.listId === suggestedId)
-      : null;
-    return {
-      type: "create-and-clear" as const,
-      bankTxn: r.bankTxn,
-      qbTxn: r.qbTxn,
-      glAccountListId: suggested?.listId,
-      glAccountName: suggested?.name,
-      confirmed: false,
-    };
-  });
+async function processPDF(_buffer: ArrayBuffer) {
+  // PDF parsing requires Node.js Buffer — in browser we'd need a different approach
+  // For now, show a message directing users to use CSV/OFX or the desktop app
+  alert(
+    "PDF parsing is available in the desktop version.\n" +
+    "For the web UI, please export your statement as CSV or OFX from your bank's online portal."
+  );
 }
+
+async function processStatement(statement: BankStatement) {
+  currentStatement = statement;
+  const accounts = await provider.getAccounts();
+  const bankAccount = findAccountByNumber(accounts, statement.accountNumber);
+  const bankAccountListId = bankAccount?.listId ?? "";
+
+  const qbData = await provider.getAllData(bankAccountListId);
+
+  // Split bank transactions by type
+  const credits = statement.transactions.filter((t) => t.type === "credit");
+  const debits = statement.transactions.filter((t) => t.type === "debit");
+
+  // Match credits → invoices, debits → bills
+  const invoiceMap = matchInvoices(credits, qbData.invoices);
+  const billMap = matchBills(debits, qbData.bills);
+
+  // Also match against existing QB transactions for clearing
+  const existingMatches = matchTransactions(statement.transactions, qbData.transactions);
+
+  currentPlan = planActions(
+    statement.transactions,
+    qbData,
+    invoiceMap,
+    billMap,
+    existingMatches,
+    {
+      bankAccountListId,
+      defaultExpenseAccountListId: "GL-315",
+      defaultIncomeAccountListId: "GL-103",
+    }
+  );
+
+  // Apply keyword-based GL suggestions to unconfirmed actions
+  for (const action of currentPlan.actions) {
+    if (!action.confirmed && (action.type === "create-expense" || action.type === "create-deposit")) {
+      const suggested = suggestGLAccount(action.bankTxn.description);
+      if (suggested) {
+        action.glAccountListId = suggested;
+        const glAccounts = getGLAccounts();
+        action.glAccountName = glAccounts.find((a) => a.listId === suggested)?.name;
+      }
+    }
+  }
+
+  showStep("review");
+}
+
+// ── Step navigation ──
 
 const STEPS: Array<typeof currentStep> = ["upload", "review", "categorise", "confirm", "done"];
 
 function showStep(step: typeof currentStep) {
   currentStep = step;
-  const cards = ["upload", "review", "categorise", "confirm", "done"] as const;
-  for (const c of cards) {
+  for (const c of STEPS) {
     document.getElementById(`${c}-card`)!.style.display = c === step ? "block" : "none";
   }
 
@@ -128,49 +164,76 @@ function showStep(step: typeof currentStep) {
 
 // ── Step 1: Review matches ──
 
+function actionLabel(a: ReconAction): string {
+  switch (a.type) {
+    case "receive-payment": return "Invoice Payment";
+    case "bill-payment": return "Bill Payment";
+    case "clear-existing": return "Clear Existing";
+    case "create-expense": return "New Expense";
+    case "create-deposit": return "New Deposit";
+    case "create-journal-entry": return "Journal Entry";
+  }
+}
+
+function isAutoAction(a: ReconAction): boolean {
+  return a.type === "receive-payment" || a.type === "bill-payment" || a.type === "clear-existing";
+}
+
 function renderReview() {
-  if (!currentStatement) return;
+  if (!currentStatement || !currentPlan) return;
 
   const bankName = BANK_NAMES[currentStatement.bank] ?? currentStatement.bank;
-  const account = findAccountByNumber(currentStatement.accountNumber);
-
   document.getElementById("review-bank")!.textContent =
-    `${bankName} — ${account ? account.name : currentStatement.accountNumber}`;
+    `${bankName} — ${currentStatement.accountNumber}`;
 
-  const matched = reconActions.filter((a) => a.type === "clear");
-  const unmatched = reconActions.filter((a) => a.type === "create-and-clear");
+  const auto = currentPlan.actions.filter((a) => isAutoAction(a));
+  const manual = currentPlan.actions.filter((a) => !isAutoAction(a));
 
   document.getElementById("review-summary")!.innerHTML = `
-    <div class="stat matched"><div class="value">${matched.length}</div><div class="label">Matched — will mark cleared</div></div>
-    <div class="stat unmatched"><div class="value">${unmatched.length}</div><div class="label">New — need GL account</div></div>
-    <div class="stat"><div class="value">${reconActions.length}</div><div class="label">Total</div></div>
+    <div class="stat matched"><div class="value">${auto.length}</div><div class="label">Auto-matched</div></div>
+    <div class="stat unmatched"><div class="value">${manual.length}</div><div class="label">Need categorisation</div></div>
+    <div class="stat"><div class="value">${currentPlan.actions.length}</div><div class="label">Total</div></div>
   `;
 
   renderReviewTable();
 }
 
 function renderReviewTable() {
+  if (!currentPlan) return;
+
   const filtered = activeFilter === "all"
-    ? reconActions
-    : reconActions.filter((a) =>
-        activeFilter === "matched" ? a.type === "clear" : a.type === "create-and-clear"
+    ? currentPlan.actions
+    : currentPlan.actions.filter((a) =>
+        activeFilter === "matched" ? isAutoAction(a) : !isAutoAction(a)
       );
 
   document.getElementById("review-body")!.innerHTML = filtered
-    .map((a, idx) => {
+    .map((a) => {
       const t = a.bankTxn;
+      const badge = isAutoAction(a)
+        ? `<span class="badge matched">${actionLabel(a)}</span>`
+        : `<span class="badge unmatched">${actionLabel(a)}</span>`;
+      const target = getActionTarget(a);
       return `<tr>
         <td>${formatDate(t.date)}</td>
         <td>${escapeHtml(t.description)}</td>
         <td class="amount ${t.type}">${t.type === "debit" ? "-" : ""}R${formatAmount(t.amount)}</td>
-        <td>${a.type === "clear"
-          ? `<span class="badge matched">Match → Clear</span>`
-          : `<span class="badge unmatched">New → Create & Clear</span>`
-        }</td>
-        <td>${a.qbTxn ? escapeHtml(a.qbTxn.memo ?? "") : "—"}</td>
+        <td>${badge}</td>
+        <td>${escapeHtml(target)}</td>
       </tr>`;
     })
     .join("");
+}
+
+function getActionTarget(a: ReconAction): string {
+  switch (a.type) {
+    case "receive-payment": return `Invoice ${a.invoice.refNumber ?? a.invoice.txnId} → ${a.customer.name}`;
+    case "bill-payment": return `Bill → ${a.vendor.name}`;
+    case "clear-existing": return a.qbTxn.memo ?? "";
+    case "create-expense": return a.glAccountName ?? "Needs account";
+    case "create-deposit": return a.glAccountName ?? "Needs account";
+    case "create-journal-entry": return a.memo ?? "";
+  }
 }
 
 document.querySelectorAll<HTMLButtonElement>("#review-filter button").forEach((btn) => {
@@ -183,27 +246,26 @@ document.querySelectorAll<HTMLButtonElement>("#review-filter button").forEach((b
 });
 
 document.getElementById("btn-to-categorise")?.addEventListener("click", () => {
-  const unmatched = reconActions.filter((a) => a.type === "create-and-clear");
-  if (unmatched.length === 0) {
-    showStep("confirm");
-  } else {
-    showStep("categorise");
-  }
+  if (!currentPlan) return;
+  const manual = currentPlan.actions.filter((a) => !isAutoAction(a));
+  showStep(manual.length === 0 ? "confirm" : "categorise");
 });
 
 // ── Step 2: Categorise unmatched ──
 
 function renderCategorise() {
-  const unmatched = reconActions.filter((a) => a.type === "create-and-clear");
+  if (!currentPlan) return;
+  const manual = currentPlan.actions.filter((a) => !isAutoAction(a));
+  const glAccounts = getGLAccounts();
 
-  const glOptions = MOCK_GL_ACCOUNTS
+  const glOptions = glAccounts
     .map((a) => `<option value="${a.listId}">${escapeHtml(a.name)} (${a.accountType})</option>`)
     .join("");
 
-  document.getElementById("categorise-body")!.innerHTML = unmatched
+  document.getElementById("categorise-body")!.innerHTML = manual
     .map((a) => {
       const t = a.bankTxn;
-      const globalIdx = reconActions.indexOf(a);
+      const globalIdx = currentPlan!.actions.indexOf(a);
       return `<tr>
         <td>${formatDate(t.date)}</td>
         <td>${escapeHtml(t.description)}</td>
@@ -214,9 +276,11 @@ function renderCategorise() {
             ${glOptions}
           </select>
         </td>
-        <td>${a.glAccountName
+        <td>${a.type === "create-expense" && a.glAccountName
           ? `<span style="color: var(--text-muted); font-size: 12px;">Suggested: ${escapeHtml(a.glAccountName)}</span>`
-          : ""
+          : a.type === "create-deposit" && a.glAccountName
+            ? `<span style="color: var(--text-muted); font-size: 12px;">Suggested: ${escapeHtml(a.glAccountName)}</span>`
+            : ""
         }</td>
       </tr>`;
     })
@@ -225,20 +289,23 @@ function renderCategorise() {
   // Pre-select suggested accounts
   document.querySelectorAll<HTMLSelectElement>(".gl-select").forEach((sel) => {
     const idx = parseInt(sel.dataset.idx!);
-    const action = reconActions[idx];
-    if (action.glAccountListId) {
-      sel.value = action.glAccountListId;
+    const action = currentPlan!.actions[idx];
+    if (action.type === "create-expense" || action.type === "create-deposit") {
+      if (action.glAccountListId) sel.value = action.glAccountListId;
     }
   });
 
-  // Listen for changes
   document.querySelectorAll<HTMLSelectElement>(".gl-select").forEach((sel) => {
     sel.addEventListener("change", () => {
       const idx = parseInt(sel.dataset.idx!);
-      const account = MOCK_GL_ACCOUNTS.find((a) => a.listId === sel.value);
-      reconActions[idx].glAccountListId = account?.listId;
-      reconActions[idx].glAccountName = account?.name;
-      reconActions[idx].confirmed = !!account;
+      const action = currentPlan!.actions[idx];
+      const glAccounts = getGLAccounts();
+      const account = glAccounts.find((a) => a.listId === sel.value);
+      if (action.type === "create-expense" || action.type === "create-deposit") {
+        action.glAccountListId = account?.listId;
+        action.glAccountName = account?.name;
+      }
+      action.confirmed = !!account;
       updateNextButton();
     });
   });
@@ -249,8 +316,8 @@ function renderCategorise() {
 document.getElementById("btn-accept-suggestions")?.addEventListener("click", () => {
   document.querySelectorAll<HTMLSelectElement>(".gl-select").forEach((sel) => {
     const idx = parseInt(sel.dataset.idx!);
-    const action = reconActions[idx];
-    if (action.glAccountListId && !sel.value) {
+    const action = currentPlan!.actions[idx];
+    if ((action.type === "create-expense" || action.type === "create-deposit") && action.glAccountListId && !sel.value) {
       sel.value = action.glAccountListId;
       action.confirmed = true;
     }
@@ -259,90 +326,94 @@ document.getElementById("btn-accept-suggestions")?.addEventListener("click", () 
 });
 
 function updateNextButton() {
-  const unmatched = reconActions.filter((a) => a.type === "create-and-clear");
-  const categorised = unmatched.filter((a) => a.glAccountListId);
+  if (!currentPlan) return;
+  const manual = currentPlan.actions.filter((a) => !isAutoAction(a));
+  const categorised = manual.filter((a) => a.confirmed);
   const btn = document.getElementById("btn-to-confirm") as HTMLButtonElement;
-  btn.disabled = categorised.length < unmatched.length;
-  btn.textContent = categorised.length === unmatched.length
+  btn.disabled = categorised.length < manual.length;
+  btn.textContent = categorised.length === manual.length
     ? "Next: Review & Confirm"
-    : `${unmatched.length - categorised.length} still need an account`;
+    : `${manual.length - categorised.length} still need an account`;
 }
 
-document.getElementById("btn-to-confirm")?.addEventListener("click", () => {
-  showStep("confirm");
-});
+document.getElementById("btn-to-confirm")?.addEventListener("click", () => showStep("confirm"));
+document.getElementById("btn-back-review")?.addEventListener("click", () => showStep("review"));
 
-document.getElementById("btn-back-review")?.addEventListener("click", () => {
-  showStep("review");
-});
-
-// ── Step 4: Confirm & Reconcile ──
+// ── Step 3: Confirm & Reconcile ──
 
 function renderConfirm() {
-  const matched = reconActions.filter((a) => a.type === "clear");
-  const created = reconActions.filter((a) => a.type === "create-and-clear");
-  const totalAmount = reconActions.reduce((s, a) => s + a.bankTxn.amount, 0);
+  if (!currentPlan) return;
+  const auto = currentPlan.actions.filter((a) => isAutoAction(a));
+  const manual = currentPlan.actions.filter((a) => !isAutoAction(a));
+  const totalAmount = currentPlan.actions.reduce((s, a) => s + a.bankTxn.amount, 0);
 
   document.getElementById("confirm-summary")!.innerHTML = `
-    <div class="stat matched"><div class="value">${matched.length}</div><div class="label">Mark as cleared</div></div>
-    <div class="stat" style="background: #e7f1ff;"><div class="value">${created.length}</div><div class="label">Create & clear</div></div>
-    <div class="stat"><div class="value">${reconActions.length}</div><div class="label">Total transactions</div></div>
+    <div class="stat matched"><div class="value">${auto.length}</div><div class="label">Auto-matched</div></div>
+    <div class="stat" style="background: #e7f1ff;"><div class="value">${manual.length}</div><div class="label">Manually categorised</div></div>
+    <div class="stat"><div class="value">${currentPlan.actions.length}</div><div class="label">Total transactions</div></div>
     <div class="stat"><div class="value">R${formatAmount(totalAmount)}</div><div class="label">Total value</div></div>
   `;
 
-  document.getElementById("confirm-body")!.innerHTML = reconActions
+  document.getElementById("confirm-body")!.innerHTML = currentPlan.actions
     .map((a) => {
       const t = a.bankTxn;
-      const actionLabel = a.type === "clear"
-        ? `<span class="badge matched">Clear</span>`
-        : `<span class="badge" style="background: #e7f1ff; color: var(--primary);">Create & Clear</span>`;
-      const target = a.type === "clear"
-        ? escapeHtml(a.qbTxn?.memo ?? "")
-        : escapeHtml(a.glAccountName ?? "");
+      const badge = isAutoAction(a)
+        ? `<span class="badge matched">${actionLabel(a)}</span>`
+        : `<span class="badge" style="background: #e7f1ff; color: var(--primary);">${actionLabel(a)}</span>`;
       return `<tr>
         <td>${formatDate(t.date)}</td>
         <td>${escapeHtml(t.description)}</td>
         <td class="amount ${t.type}">${t.type === "debit" ? "-" : ""}R${formatAmount(t.amount)}</td>
-        <td>${actionLabel}</td>
-        <td>${target}</td>
+        <td>${badge}</td>
+        <td>${escapeHtml(getActionTarget(a))}</td>
       </tr>`;
     })
     .join("");
 }
 
 document.getElementById("btn-reconcile")?.addEventListener("click", () => {
+  if (!currentPlan) return;
+  // Mark all as confirmed for execution
+  for (const a of currentPlan.actions) a.confirmed = true;
+
+  // Generate qbXML requests (would be sent to COM bridge)
+  const requests = generateRequests(currentPlan.actions);
+  console.log(`Generated ${requests.length} qbXML requests`);
+
   showStep("done");
 });
 
 document.getElementById("btn-back-categorise")?.addEventListener("click", () => {
-  const unmatched = reconActions.filter((a) => a.type === "create-and-clear");
-  showStep(unmatched.length > 0 ? "categorise" : "review");
+  if (!currentPlan) return;
+  const manual = currentPlan.actions.filter((a) => !isAutoAction(a));
+  showStep(manual.length > 0 ? "categorise" : "review");
 });
 
-// ── Step 5: Done ──
+// ── Step 4: Done ──
 
 function renderDone() {
-  const matched = reconActions.filter((a) => a.type === "clear");
-  const created = reconActions.filter((a) => a.type === "create-and-clear");
+  if (!currentPlan) return;
+  const auto = currentPlan.actions.filter((a) => isAutoAction(a));
+  const manual = currentPlan.actions.filter((a) => !isAutoAction(a));
 
-  const clearedAmount = matched.reduce((s, a) => s + a.bankTxn.amount, 0);
-  const createdAmount = created.reduce((s, a) => s + a.bankTxn.amount, 0);
+  const autoAmount = auto.reduce((s, a) => s + a.bankTxn.amount, 0);
+  const manualAmount = manual.reduce((s, a) => s + a.bankTxn.amount, 0);
 
   document.getElementById("done-summary")!.innerHTML = `
-    <div class="stat matched"><div class="value">${matched.length}</div><div class="label">Existing txns marked cleared</div></div>
-    <div class="stat"><div class="value">R${formatAmount(clearedAmount)}</div><div class="label">Cleared value</div></div>
-    <div class="stat" style="background: #e7f1ff;"><div class="value">${created.length}</div><div class="label">New txns created & cleared</div></div>
-    <div class="stat"><div class="value">R${formatAmount(createdAmount)}</div><div class="label">Created value</div></div>
+    <div class="stat matched"><div class="value">${auto.length}</div><div class="label">Auto-reconciled</div></div>
+    <div class="stat"><div class="value">R${formatAmount(autoAmount)}</div><div class="label">Auto value</div></div>
+    <div class="stat" style="background: #e7f1ff;"><div class="value">${manual.length}</div><div class="label">Manually categorised</div></div>
+    <div class="stat"><div class="value">R${formatAmount(manualAmount)}</div><div class="label">Manual value</div></div>
   `;
 
-  document.getElementById("done-detail")!.innerHTML = created
+  document.getElementById("done-detail")!.innerHTML = manual
     .map((a) => {
       const t = a.bankTxn;
       return `<tr>
         <td>${formatDate(t.date)}</td>
         <td>${escapeHtml(t.description)}</td>
         <td class="amount ${t.type}">${t.type === "debit" ? "-" : ""}R${formatAmount(t.amount)}</td>
-        <td>${escapeHtml(a.glAccountName ?? "")}</td>
+        <td>${escapeHtml(getActionTarget(a))}</td>
       </tr>`;
     })
     .join("");
@@ -351,9 +422,9 @@ function renderDone() {
 // ── Export & Reset ──
 
 document.getElementById("btn-export")?.addEventListener("click", () => {
-  if (!reconActions.length) return;
-  const header = "Date,Description,Reference,Amount,Type,Action,GL Account,QB Match";
-  const rows = reconActions.map((a) => {
+  if (!currentPlan) return;
+  const header = "Date,Description,Reference,Amount,Type,Action,Target";
+  const rows = currentPlan.actions.map((a) => {
     const t = a.bankTxn;
     return [
       formatDate(t.date),
@@ -361,9 +432,8 @@ document.getElementById("btn-export")?.addEventListener("click", () => {
       t.reference,
       t.amount.toFixed(2),
       t.type,
-      a.type,
-      a.glAccountName ?? "",
-      a.qbTxn?.memo ?? "",
+      actionLabel(a),
+      `"${getActionTarget(a).replace(/"/g, '""')}"`,
     ].join(",");
   });
   const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv" });
@@ -379,9 +449,8 @@ document.getElementById("btn-reset")?.addEventListener("click", () => reset());
 document.getElementById("btn-new")?.addEventListener("click", () => reset());
 
 function reset() {
-  currentResults = [];
   currentStatement = null;
-  reconActions = [];
+  currentPlan = null;
   activeFilter = "all";
   fileInput.value = "";
   showStep("upload");
