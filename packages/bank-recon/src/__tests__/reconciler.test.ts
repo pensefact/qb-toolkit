@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { reconcile, getUnmatchedForImport, getAmbiguousForReview } from "../reconciler.js";
+import { parseCSVStatement } from "../parsers/index.js";
 import type { QBTransaction } from "@qb-toolkit/core";
 
 const FNB_CSV = `"62123456789","FNB Cheque Account"
@@ -27,10 +28,14 @@ const qbTxns: QBTransaction[] = [
   },
 ];
 
+function parseFnb(csv: string) {
+  return parseCSVStatement(csv, "fnb");
+}
+
 describe("reconcile", () => {
-  it("parses and matches in one pass", () => {
-    const result = reconcile(FNB_CSV, qbTxns, {
-      bank: "fnb",
+  it("matches parsed statement against QB transactions", () => {
+    const statement = parseFnb(FNB_CSV);
+    const result = reconcile(statement, qbTxns, {
       accountListId: "ACC-001",
     });
     expect(result.statement.transactions).toHaveLength(3);
@@ -38,8 +43,8 @@ describe("reconcile", () => {
   });
 
   it("produces correct summary counts", () => {
-    const result = reconcile(FNB_CSV, qbTxns, {
-      bank: "fnb",
+    const statement = parseFnb(FNB_CSV);
+    const result = reconcile(statement, qbTxns, {
       accountListId: "ACC-001",
     });
     expect(result.summary.total).toBe(3);
@@ -48,8 +53,8 @@ describe("reconcile", () => {
   });
 
   it("identifies unmatched transactions for import", () => {
-    const result = reconcile(FNB_CSV, qbTxns, {
-      bank: "fnb",
+    const statement = parseFnb(FNB_CSV);
+    const result = reconcile(statement, qbTxns, {
       accountListId: "ACC-001",
     });
     const unmatched = getUnmatchedForImport(result);
@@ -57,20 +62,21 @@ describe("reconcile", () => {
     expect(unmatched[0].bankTxn.description).toContain("VODACOM");
   });
 
-  it("auto-detects bank when not specified", () => {
+  it("auto-detects bank from CSV content", () => {
     const csv = `"62123456789","FNB Cheque Account"
 "Date","Amount","Balance","Description"
 "05/09/2024","-100.00","900.00","TEST"
 `;
-    const result = reconcile(csv, [], { accountListId: "ACC-001" });
+    const statement = parseCSVStatement(csv);
+    const result = reconcile(statement, [], { accountListId: "ACC-001" });
     expect(result.statement.bank).toBe("fnb");
   });
 });
 
 describe("getAmbiguousForReview", () => {
   it("returns empty when no ambiguous matches", () => {
-    const result = reconcile(FNB_CSV, qbTxns, {
-      bank: "fnb",
+    const statement = parseFnb(FNB_CSV);
+    const result = reconcile(statement, qbTxns, {
       accountListId: "ACC-001",
     });
     const ambiguous = getAmbiguousForReview(result);

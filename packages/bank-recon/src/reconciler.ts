@@ -1,14 +1,11 @@
 import type {
-  BankId,
   BankStatement,
   QBTransaction,
   MatchResult,
 } from "@qb-toolkit/core";
 import { matchTransactions } from "@qb-toolkit/core";
-import { parseStatement } from "./parsers/index.js";
 
 export interface ReconConfig {
-  bank?: BankId;
   accountListId: string;
   autoImportUnmatched?: boolean;
 }
@@ -29,11 +26,10 @@ export interface ReconSummary {
 }
 
 export function reconcile(
-  csvContent: string,
+  statement: BankStatement,
   qbTransactions: QBTransaction[],
   config: ReconConfig
 ): ReconResult {
-  const statement = parseStatement(csvContent, config.bank);
   const matches = matchTransactions(statement.transactions, qbTransactions);
 
   const summary: ReconSummary = {
