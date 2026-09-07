@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net;
@@ -11,25 +12,47 @@ namespace QBDesktop
     class MainForm : Form
     {
         private QBBridge.QBConnection _qb;
-        private WebBrowser _browser;
         private HttpListener _listener;
         private readonly string _companyFile;
         private readonly int _port = 2707;
+        private NotifyIcon _trayIcon;
+        private Label _statusLabel;
 
         public MainForm(string companyFile)
         {
             _companyFile = companyFile;
-            Text = "QB Toolkit — Bank Reconciliation";
-            Size = new Size(1280, 800);
+            Text = "QB Toolkit";
+            Size = new Size(400, 200);
             StartPosition = FormStartPosition.CenterScreen;
-            Icon = SystemIcons.Application;
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox = false;
 
-            _browser = new WebBrowser();
-            _browser.Dock = DockStyle.Fill;
-            _browser.ScriptErrorsSuppressed = true;
-            Controls.Add(_browser);
+            _statusLabel = new Label();
+            _statusLabel.Text = "QB Toolkit is running.\nThe UI has opened in your browser.";
+            _statusLabel.Font = new Font("Segoe UI", 11);
+            _statusLabel.Dock = DockStyle.Fill;
+            _statusLabel.TextAlign = ContentAlignment.MiddleCenter;
+            Controls.Add(_statusLabel);
+
+            _trayIcon = new NotifyIcon();
+            _trayIcon.Text = "QB Toolkit";
+            _trayIcon.Icon = SystemIcons.Application;
+            _trayIcon.Visible = true;
+            _trayIcon.DoubleClick += delegate { Show(); WindowState = FormWindowState.Normal; };
+
+            var trayMenu = new ContextMenu();
+            trayMenu.MenuItems.Add("Open UI", delegate { OpenBrowser(); });
+            trayMenu.MenuItems.Add("-");
+            trayMenu.MenuItems.Add("Exit", delegate { Close(); });
+            _trayIcon.ContextMenu = trayMenu;
 
             StartLocalServer();
+            OpenBrowser();
+        }
+
+        private void OpenBrowser()
+        {
+            Process.Start(string.Format("http://localhost:{0}", _port));
         }
 
         private void StartLocalServer()
@@ -41,24 +64,6 @@ namespace QBDesktop
             var thread = new Thread(ListenLoop);
             thread.IsBackground = true;
             thread.Start();
-
-            // Point browser at the bundled UI
-            string webDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "web");
-            if (Directory.Exists(webDir))
-            {
-                _browser.Navigate(string.Format("http://localhost:{0}/index.html", _port));
-            }
-            else
-            {
-                _browser.DocumentText = "<html><body style='font-family:Segoe UI;padding:40px'>"
-                    + "<h2>QB Toolkit</h2>"
-                    + "<p>Web UI not found. Run <code>npm run build</code> in the <code>ui/</code> folder "
-                    + "and copy the output to <code>web/</code> next to this exe.</p>"
-                    + "<p>Bridge is running on port " + _port + " — you can also open "
-                    + "<a href='http://localhost:" + _port + "/status'>status</a> or "
-                    + "use the dev server at <code>http://localhost:5173</code></p>"
-                    + "</body></html>";
-            }
         }
 
         private void ListenLoop()
@@ -250,8 +255,24 @@ namespace QBDesktop
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "");
         }
 
+        protected override void OnResize(EventArgs e)
+        {
+            if (WindowState == FormWindowState.Minimized)
+            {
+                Hide();
+            }
+            base.OnResize(e);
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+                _trayIcon = null;
+            }
+
             if (_listener != null)
             {
                 _listener.Stop();
