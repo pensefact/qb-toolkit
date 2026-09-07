@@ -19,14 +19,14 @@ namespace QBBridge
             _connection = new QBConnection(companyFile);
 
             var listener = new HttpListener();
-            listener.Prefixes.Add($"http://localhost:{Port}/");
+            listener.Prefixes.Add(string.Format("http://localhost:{0}/", Port));
             listener.Start();
-            Console.WriteLine($"Listening on http://localhost:{Port}");
-            Console.WriteLine("Endpoints: POST /qbxml, GET /status, GET /close");
+            Console.WriteLine(string.Format("Listening on http://localhost:{0}", Port));
+            Console.WriteLine("Endpoints: POST /qbxml, POST /batch, GET /status, POST /close");
             Console.WriteLine("Press Ctrl+C to stop.");
 
             var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (s, e) =>
+            Console.CancelKeyPress += delegate(object s, ConsoleCancelEventArgs e)
             {
                 e.Cancel = true;
                 cts.Cancel();
@@ -38,11 +38,11 @@ namespace QBBridge
                 try
                 {
                     var context = listener.GetContext();
-                    ThreadPool.QueueUserWorkItem(_ => HandleRequest(context));
+                    ThreadPool.QueueUserWorkItem(delegate { HandleRequest(context); });
                 }
-                catch (HttpListenerException) when (cts.IsCancellationRequested)
+                catch (HttpListenerException)
                 {
-                    break;
+                    if (cts.IsCancellationRequested) break;
                 }
             }
 
@@ -55,7 +55,6 @@ namespace QBBridge
             var req = context.Request;
             var res = context.Response;
 
-            // Only allow requests from localhost origins (prevents DNS rebinding and cross-origin access)
             string origin = req.Headers["Origin"];
             if (!IsLocalOrigin(origin) && !IsLocalHost(req.Url.Host))
             {
@@ -105,14 +104,14 @@ namespace QBBridge
             }
             catch (Exception ex)
             {
-                SendJson(res, 500, $"{{\"error\":\"{Escape(ex.Message)}\"}}");
+                SendJson(res, 500, "{\"error\":\"" + Escape(ex.Message) + "\"}");
             }
         }
 
         static void HandleStatus(HttpListenerResponse res)
         {
             bool connected = _connection.IsConnected;
-            string json = $"{{\"connected\":{connected.ToString().ToLower()},\"port\":{Port}}}";
+            string json = "{\"connected\":" + connected.ToString().ToLower() + ",\"port\":" + Port + "}";
             SendJson(res, 200, json);
         }
 
@@ -147,7 +146,6 @@ namespace QBBridge
                 body = reader.ReadToEnd();
             }
 
-            // Batch expects newline-delimited qbXML requests
             var requests = body.Split(new[] { "\n---\n" }, StringSplitOptions.RemoveEmptyEntries);
             if (requests.Length == 0)
             {
@@ -170,11 +168,11 @@ namespace QBBridge
                 try
                 {
                     string response = _connection.ProcessRequest(xml);
-                    sb.Append($"{{\"index\":{i},\"success\":true,\"response\":\"{Escape(response)}\"}}");
+                    sb.Append("{\"index\":" + i + ",\"success\":true,\"response\":\"" + Escape(response) + "\"}");
                 }
                 catch (Exception ex)
                 {
-                    sb.Append($"{{\"index\":{i},\"success\":false,\"error\":\"{Escape(ex.Message)}\"}}");
+                    sb.Append("{\"index\":" + i + ",\"success\":false,\"error\":\"" + Escape(ex.Message) + "\"}");
                 }
 
                 if (i < requests.Length - 1) sb.Append(",");

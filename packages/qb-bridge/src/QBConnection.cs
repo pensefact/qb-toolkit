@@ -2,10 +2,6 @@ using System;
 
 namespace QBBridge
 {
-    /// <summary>
-    /// Wraps the QBXMLRP2.RequestProcessor COM object for communicating with QuickBooks Desktop.
-    /// Manages connection lifecycle and session state.
-    /// </summary>
     class QBConnection : IDisposable
     {
         private readonly string _companyFile;
@@ -16,11 +12,14 @@ namespace QBBridge
         private const string AppName = "QB Toolkit Bridge";
         private const string AppId = "QBToolkit";
 
-        public bool IsConnected => _connected;
-
-        public QBConnection(string companyFile = "")
+        public bool IsConnected
         {
-            _companyFile = companyFile;
+            get { return _connected; }
+        }
+
+        public QBConnection(string companyFile)
+        {
+            _companyFile = companyFile != null ? companyFile : "";
         }
 
         public void Connect()
@@ -49,7 +48,7 @@ namespace QBBridge
             catch (Exception ex)
             {
                 _connected = false;
-                throw new Exception($"Failed to connect to QuickBooks: {ex.Message}", ex);
+                throw new Exception("Failed to connect to QuickBooks: " + ex.Message, ex);
             }
         }
 
@@ -79,7 +78,7 @@ namespace QBBridge
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error disconnecting: {ex.Message}");
+                Console.WriteLine("Error disconnecting: " + ex.Message);
             }
 
             _connected = false;
