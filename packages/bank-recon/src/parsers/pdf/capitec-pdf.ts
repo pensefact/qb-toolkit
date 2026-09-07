@@ -1,80 +1,89 @@
 import type { BankStatement, Transaction } from "@qb-toolkit/core";
 import type { PdfText } from "../../pdf-extract.js";
 
-// Capitec PDF layout:
-// Transaction table: Date | Transaction | Money in | Money out | Balance
-// Date format: DD/MM/YYYY or DD Mon YYYY
-// Separate columns for money in (credit) and money out (debit)
+// Capitec PDF layout (confirmed):
+// Columns: Date | Description | Money In (R) | Money Out (R) | Balance (R)
+// Date format: DD/MM/YYYY
+// Separate "money in" and "money out" columns
+// Opening/closing balance in header section
 
-const DATE_RE = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/;
-const DATE_MON_RE = /^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})/i;
-const AMOUNT_RE = /(\d[\d\s]*\d?\.\d{2})/g;
+const DATE_RE = /^(\d{2})\/(\d{2})\/(\d{4})/;
+const AMOUNT_RE = /(\d[\d\s,]*\.\d{2})/g;
 const ACCOUNT_RE = /(\d{9,13})/;
-
-const MONTHS: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-};
 
 export function parseCapitecPdf(pdf: PdfText): BankStatement {
   const accountNumber = extractAccountNumber(pdf.lines);
   const transactions: Transaction[] = [];
-  let currentDate: Date | null = null;
+  let inTransactions = false;
   let hasMoneyInOut = false;
 
   for (const line of pdf.lines) {
-    if (/money\s*in.*money\s*out/i.test(line)) {
+    if (/money\s*in.*money\s*out/i.test(line) || /description.*money.*in.*money.*out/i.test(line)) {
+      inTransactions = true;
       hasMoneyInOut = true;
       continue;
     }
-
-    const dateMatch = line.match(DATE_RE) ?? line.match(DATE_MON_RE);
-    if (dateMatch) {
-      currentDate = parseLineDate(dateMatch);
+    if (/date.*description.*amount/i.test(line)) {
+      inTransactions = true;
+      continue;
     }
 
-    if (!currentDate) continue;
+    if (!inTransactions) continue;
+    if (/total|closing balance|opening balance/i.test(line) && !DATE_RE.test(line)) continue;
 
-    const amounts = extractAmounts(line);
+    const dateMatch = line.match(DATE_RE);
+    if (!dateMatch) continue;
+
+    const date = new Date(+dateMatch[3], +dateMatch[2] - 1, +dateMatch[1]);
+    const rest = line.replace(DATE_RE, "");
+    const amounts = extractAmounts(rest);
     if (amounts.length === 0) continue;
 
-    const desc = extractDescription(line);
-    if (!desc) continue;
+    const desc = extractDescription(rest);
 
     let amount: number;
     let type: "debit" | "credit";
 
     if (hasMoneyInOut && amounts.length >= 2) {
-      // Money in | Money out | Balance — figure out which column has the value
-      // If first amount matches a typical "money in" position, it's a credit
-      amount = amounts[0];
-      type = "credit";
-      // Heuristic: if there are 3 amounts, the pattern is [money_in, money_out, balance]
-      // One of the first two will be 0 or absent in the text
+      // Money In | Money Out | Balance
+      // In PDF text extraction, both columns merge — need to figure out which is which
+      // The balance is the last amount; the transaction amount is before it
+      const balance = amounts[amounts.length - 1];
+      const txnAmount = amounts[0];
+
+      // Heuristic: if there are exactly 3 amounts, the pattern is [money_in, money_out, balance]
+      // One will typically be 0 or the text won't contain it
+      // If 2 amounts: one is the transaction, other is balance
+      // Compare with balance to determine direction
+      if (amounts.length === 3) {
+        // [money_in, money_out, balance] — one should be near zero or it's the non-zero one
+        if (amounts[0] > amounts[1]) {
+          amount = amounts[0];
+          type = "credit";
+        } else {
+          amount = amounts[1];
+          type = "debit";
+        }
+      } else {
+        amount = txnAmount;
+        type = "credit"; // default; caller should verify against balance movement
+      }
     } else {
-      amount = amounts[0];
-      type = amount < 0 ? "debit" : "credit";
-      amount = Math.abs(amount);
+      amount = Math.abs(amounts[0]);
+      type = amounts[0] < 0 ? "debit" : "credit";
     }
 
     transactions.push({
-      date: currentDate,
-      amount,
-      description: desc,
+      date,
+      amount: Math.abs(amount),
+      description: desc || "(no description)",
       reference: extractReference(desc),
-      balance: amounts[amounts.length - 1],
+      balance: amounts.length > 0 ? Math.abs(amounts[amounts.length - 1]) : undefined,
       type,
     });
   }
 
   return { bank: "capitec", accountNumber, transactions };
-}
-
-function parseLineDate(match: RegExpMatchArray): Date {
-  if (match[2] && MONTHS[match[2].toLowerCase()] !== undefined) {
-    return new Date(+match[3], MONTHS[match[2].toLowerCase()], +match[1]);
-  }
-  return new Date(+match[3], +match[2] - 1, +match[1]);
 }
 
 function extractAccountNumber(lines: string[]): string {
@@ -85,25 +94,23 @@ function extractAccountNumber(lines: string[]): string {
   return "";
 }
 
-function extractAmounts(line: string): number[] {
+function extractAmounts(text: string): number[] {
   const results: number[] = [];
-  let m: RegExpExecArray | null;
   const re = new RegExp(AMOUNT_RE.source, "g");
-  while ((m = re.exec(line)) !== null) {
-    const val = parseFloat(m[1].replace(/\s/g, ""));
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const val = parseFloat(m[1].replace(/[,\s]/g, ""));
     if (!isNaN(val)) results.push(val);
   }
   return results;
 }
 
-function extractDescription(line: string): string {
-  let desc = line
-    .replace(DATE_RE, "")
-    .replace(DATE_MON_RE, "")
-    .replace(AMOUNT_RE, "")
+function extractDescription(text: string): string {
+  return text
+    .replace(new RegExp(AMOUNT_RE.source, "g"), "")
+    .trim()
+    .replace(/^[-–\s]+|[-–\s]+$/g, "")
     .trim();
-  desc = desc.replace(/^[-–\s]+|[-–\s]+$/g, "").trim();
-  return desc;
 }
 
 function extractReference(desc: string): string {

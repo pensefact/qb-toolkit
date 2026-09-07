@@ -1,61 +1,88 @@
 import type { BankStatement, Transaction } from "@qb-toolkit/core";
 import type { PdfText } from "../../pdf-extract.js";
 
-// ABSA PDF layout:
-// Transaction table: Date | Description | Amount | Balance
-// Date format: DD/MM/YYYY or DD Mon YYYY
-// Debits shown as negative
+// ABSA PDF layout (confirmed from pdf_statement_reader config):
+// Columns: Date | Transaction Description | Transaction Detail | Charge | Debit Amount | Credit Amount | Balance
+// Date format: DD/MM/YYYY
+// Separate debit/credit columns (no sign/suffix)
+// Transaction detail appears on the line below the main transaction row
+// Amounts with trailing "-" mean negative (e.g. "1,234.56-")
 
-const DATE_RE = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/;
-const DATE_MON_RE = /^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})/i;
-const AMOUNT_RE = /(-?\d[\d\s]*\d?\.\d{2})/g;
+const DATE_RE = /^(\d{2})\/(\d{2})\/(\d{4})/;
+const AMOUNT_RE = /(\d[\d,]*\.\d{2}-?)/g;
 const ACCOUNT_RE = /(\d{9,13})/;
-
-const MONTHS: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-};
 
 export function parseABSAPdf(pdf: PdfText): BankStatement {
   const accountNumber = extractAccountNumber(pdf.lines);
   const transactions: Transaction[] = [];
-  let currentDate: Date | null = null;
+  let inTransactions = false;
 
-  for (const line of pdf.lines) {
-    if (/opening balance|closing balance|statement/i.test(line) && !/^(\d{1,2})[/-]/.test(line)) continue;
+  for (let i = 0; i < pdf.lines.length; i++) {
+    const line = pdf.lines[i];
 
-    const dateMatch = line.match(DATE_RE) ?? line.match(DATE_MON_RE);
-    if (dateMatch) {
-      currentDate = parseLineDate(dateMatch);
+    if (/date.*description.*debit.*credit.*balance/i.test(line) ||
+        /date.*transaction.*amount.*balance/i.test(line)) {
+      inTransactions = true;
+      continue;
     }
 
-    if (!currentDate) continue;
+    if (!inTransactions) continue;
+    if (/total|closing balance|opening balance/i.test(line) && !DATE_RE.test(line)) continue;
 
+    const dateMatch = line.match(DATE_RE);
+    if (!dateMatch) continue;
+
+    const date = new Date(+dateMatch[3], +dateMatch[2] - 1, +dateMatch[1]);
     const amounts = extractAmounts(line);
     if (amounts.length === 0) continue;
 
     const desc = extractDescription(line);
-    if (!desc) continue;
 
-    const amount = amounts[0];
+    // Check next line for transaction detail (ABSA puts detail on following line)
+    let detail = "";
+    if (i + 1 < pdf.lines.length) {
+      const nextLine = pdf.lines[i + 1];
+      if (!DATE_RE.test(nextLine) && !/total|closing|opening/i.test(nextLine)) {
+        const nextAmounts = extractAmounts(nextLine);
+        if (nextAmounts.length === 0 && nextLine.trim()) {
+          detail = nextLine.trim();
+        }
+      }
+    }
+
+    const fullDesc = detail ? `${desc} ${detail}` : desc;
+
+    // With separate debit/credit columns, we need to determine type
+    // If there are 3+ amounts: [charge?, debit, credit, balance] or subset
+    // The balance is typically the last amount; debit/credit determined by column position
+    // Simplified: if we see 2 amounts, first is transaction, second is balance
+    let amount: number;
+    let type: "debit" | "credit";
+
+    if (amounts.length >= 3) {
+      // Likely: debit, credit, balance (one of debit/credit is 0 or absent in text)
+      amount = amounts[0];
+      type = "debit";
+    } else if (amounts.length === 2) {
+      amount = amounts[0];
+      type = amount < 0 ? "debit" : "credit";
+      amount = Math.abs(amount);
+    } else {
+      amount = Math.abs(amounts[0]);
+      type = amounts[0] < 0 ? "debit" : "credit";
+    }
+
     transactions.push({
-      date: currentDate,
+      date,
       amount: Math.abs(amount),
-      description: desc,
-      reference: extractReference(desc),
-      balance: amounts.length > 1 ? amounts[amounts.length - 1] : undefined,
-      type: amount < 0 ? "debit" : "credit",
+      description: fullDesc || "(no description)",
+      reference: extractReference(fullDesc),
+      balance: amounts[amounts.length - 1] !== undefined ? Math.abs(amounts[amounts.length - 1]) : undefined,
+      type,
     });
   }
 
   return { bank: "absa", accountNumber, transactions };
-}
-
-function parseLineDate(match: RegExpMatchArray): Date {
-  if (match[2] && MONTHS[match[2].toLowerCase()] !== undefined) {
-    return new Date(+match[3], MONTHS[match[2].toLowerCase()], +match[1]);
-  }
-  return new Date(+match[3], +match[2] - 1, +match[1]);
 }
 
 function extractAccountNumber(lines: string[]): string {
@@ -68,23 +95,28 @@ function extractAccountNumber(lines: string[]): string {
 
 function extractAmounts(line: string): number[] {
   const results: number[] = [];
-  let m: RegExpExecArray | null;
   const re = new RegExp(AMOUNT_RE.source, "g");
+  let m: RegExpExecArray | null;
   while ((m = re.exec(line)) !== null) {
-    const val = parseFloat(m[1].replace(/\s/g, ""));
+    let raw = m[1].replace(/,/g, "");
+    let val: number;
+    if (raw.endsWith("-")) {
+      val = -parseFloat(raw.slice(0, -1));
+    } else {
+      val = parseFloat(raw);
+    }
     if (!isNaN(val)) results.push(val);
   }
   return results;
 }
 
 function extractDescription(line: string): string {
-  let desc = line
+  return line
     .replace(DATE_RE, "")
-    .replace(DATE_MON_RE, "")
-    .replace(AMOUNT_RE, "")
+    .replace(new RegExp(AMOUNT_RE.source, "g"), "")
+    .trim()
+    .replace(/^[-–\s]+|[-–\s]+$/g, "")
     .trim();
-  desc = desc.replace(/^[-–\s]+|[-–\s]+$/g, "").trim();
-  return desc;
 }
 
 function extractReference(desc: string): string {

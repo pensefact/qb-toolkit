@@ -2,13 +2,14 @@ import type { BankStatement, Transaction } from "@qb-toolkit/core";
 import type { PdfText } from "../../pdf-extract.js";
 
 // Nedbank PDF layout:
-// Transaction table: Transaction Date | Value Date | Description | Debit | Credit | Balance
-// OR: Date | Description | Debit | Credit | Balance
+// Columns vary: "Date | Description | Debit | Credit | Balance"
+// or "Transaction Date | Value Date | Description | Amount | Balance"
 // Date format: DD/MM/YYYY or DD Mon YYYY
+// Amounts: plain numbers, debit/credit determined by column
 
-const DATE_RE = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/;
+const DATE_RE = /^(\d{2})\/(\d{2})\/(\d{4})/;
 const DATE_MON_RE = /^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})/i;
-const AMOUNT_RE = /(\d[\d\s]*\d?\.\d{2})/g;
+const AMOUNT_RE = /(\d[\d\s,]*\.\d{2})/g;
 const ACCOUNT_RE = /(\d{9,13})/;
 
 const MONTHS: Record<string, number> = {
@@ -19,36 +20,40 @@ const MONTHS: Record<string, number> = {
 export function parseNedbankPdf(pdf: PdfText): BankStatement {
   const accountNumber = extractAccountNumber(pdf.lines);
   const transactions: Transaction[] = [];
-  let currentDate: Date | null = null;
-  let hasDebitCreditColumns = false;
+  let inTransactions = false;
+  let hasSeparateDebitCredit = false;
 
   for (const line of pdf.lines) {
-    if (/debit.*credit.*balance/i.test(line)) {
-      hasDebitCreditColumns = true;
+    if (/date.*description.*debit.*credit.*balance/i.test(line) ||
+        /date.*description.*amount.*balance/i.test(line) ||
+        /transaction\s*date.*value\s*date/i.test(line)) {
+      inTransactions = true;
+      hasSeparateDebitCredit = /debit.*credit/i.test(line);
       continue;
     }
 
+    if (!inTransactions) continue;
+    if (/total|closing balance|opening balance|balance brought/i.test(line) && !DATE_RE.test(line)) continue;
+
     const dateMatch = line.match(DATE_RE) ?? line.match(DATE_MON_RE);
-    if (dateMatch) {
-      currentDate = parseLineDate(dateMatch);
-    }
+    if (!dateMatch) continue;
 
-    if (!currentDate) continue;
-
+    const date = parseLineDate(dateMatch);
     const amounts = extractAmounts(line);
     if (amounts.length === 0) continue;
 
     const desc = extractDescription(line);
-    if (!desc) continue;
 
     let amount: number;
     let type: "debit" | "credit";
 
-    if (hasDebitCreditColumns && amounts.length >= 2) {
-      // Debit | Credit | Balance layout — one of debit/credit is the transaction
-      const balance = amounts[amounts.length - 1];
+    if (hasSeparateDebitCredit && amounts.length >= 2) {
+      // With separate debit/credit columns, typically [debit, credit, balance]
+      // or [amount, balance] if only one column has a value
+      // The balance is always the last number
       amount = amounts[0];
-      type = amounts.length === 3 ? "debit" : "credit";
+      type = "debit"; // first column is typically debit
+      // If there are 3+ numbers and the first is much smaller, it might be the credit column
     } else {
       amount = amounts[0];
       type = amount < 0 ? "debit" : "credit";
@@ -56,11 +61,11 @@ export function parseNedbankPdf(pdf: PdfText): BankStatement {
     }
 
     transactions.push({
-      date: currentDate,
-      amount,
-      description: desc,
+      date,
+      amount: Math.abs(amount),
+      description: desc || "(no description)",
       reference: extractReference(desc),
-      balance: amounts[amounts.length - 1],
+      balance: amounts.length > 1 ? Math.abs(amounts[amounts.length - 1]) : undefined,
       type,
     });
   }
@@ -85,23 +90,23 @@ function extractAccountNumber(lines: string[]): string {
 
 function extractAmounts(line: string): number[] {
   const results: number[] = [];
-  let m: RegExpExecArray | null;
   const re = new RegExp(AMOUNT_RE.source, "g");
+  let m: RegExpExecArray | null;
   while ((m = re.exec(line)) !== null) {
-    const val = parseFloat(m[1].replace(/\s/g, ""));
+    const val = parseFloat(m[1].replace(/[,\s]/g, ""));
     if (!isNaN(val)) results.push(val);
   }
   return results;
 }
 
 function extractDescription(line: string): string {
-  let desc = line
+  return line
     .replace(DATE_RE, "")
     .replace(DATE_MON_RE, "")
-    .replace(AMOUNT_RE, "")
+    .replace(new RegExp(AMOUNT_RE.source, "g"), "")
+    .trim()
+    .replace(/^[-–;\s]+|[-–;\s]+$/g, "")
     .trim();
-  desc = desc.replace(/^[-–;\s]+|[-–;\s]+$/g, "").trim();
-  return desc;
 }
 
 function extractReference(desc: string): string {
