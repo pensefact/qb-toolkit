@@ -125,7 +125,7 @@ export function matchInvoices(
 
 function scoreBillMatch(bankTxn: Transaction, bill: QBBill): number {
   const amountMatch =
-    Math.abs(bankTxn.amount - bill.amountDue) <= AMOUNT_TOLERANCE;
+    Math.abs(Math.abs(bankTxn.amount) - bill.amountDue) <= AMOUNT_TOLERANCE;
   if (!amountMatch) return 0;
 
   let score = 0.5;

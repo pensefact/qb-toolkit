@@ -105,6 +105,7 @@ export type ReconAction =
   | BillPaymentAction
   | CreateExpenseAction
   | CreateDepositAction
+  | CreateJournalEntryAction
   | ClearExistingAction;
 
 interface BaseAction {
@@ -141,9 +142,18 @@ export interface CreateDepositAction extends BaseAction {
   bankAccountListId: string;
 }
 
+export interface CreateJournalEntryAction extends BaseAction {
+  type: "create-journal-entry";
+  debitAccountListId: string;
+  creditAccountListId: string;
+  bankAccountListId: string;
+  memo?: string;
+}
+
 export interface ClearExistingAction extends BaseAction {
   type: "clear-existing";
   qbTxn: QBTransaction;
+  editSequence: string;
 }
 
 // ── Supplier / EFT types ──

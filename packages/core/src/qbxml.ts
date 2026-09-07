@@ -63,27 +63,35 @@ export function queryVendors(): string {
   );
 }
 
-export function queryInvoices(fromDate: Date, toDate: Date): string {
+export function queryInvoices(fromDate?: Date, toDate?: Date): string {
+  const dateFilter =
+    fromDate && toDate
+      ? `<ModifiedDateRangeFilter>
+    <FromModifiedDate>${formatDate(fromDate)}</FromModifiedDate>
+    <ToModifiedDate>${formatDate(toDate)}</ToModifiedDate>
+  </ModifiedDateRangeFilter>`
+      : "";
   return wrapRequest(
     "13.0",
     `<InvoiceQueryRq requestID="1">
-  <ModifiedDateRangeFilter>
-    <FromModifiedDate>${formatDate(fromDate)}</FromModifiedDate>
-    <ToModifiedDate>${formatDate(toDate)}</ToModifiedDate>
-  </ModifiedDateRangeFilter>
+  ${dateFilter}
   <PaidStatus>NotPaidOnly</PaidStatus>
 </InvoiceQueryRq>`
   );
 }
 
-export function queryBills(fromDate: Date, toDate: Date): string {
+export function queryBills(fromDate?: Date, toDate?: Date): string {
+  const dateFilter =
+    fromDate && toDate
+      ? `<ModifiedDateRangeFilter>
+    <FromModifiedDate>${formatDate(fromDate)}</FromModifiedDate>
+    <ToModifiedDate>${formatDate(toDate)}</ToModifiedDate>
+  </ModifiedDateRangeFilter>`
+      : "";
   return wrapRequest(
     "13.0",
     `<BillQueryRq requestID="1">
-  <ModifiedDateRangeFilter>
-    <FromModifiedDate>${formatDate(fromDate)}</FromModifiedDate>
-    <ToModifiedDate>${formatDate(toDate)}</ToModifiedDate>
-  </ModifiedDateRangeFilter>
+  ${dateFilter}
   <PaidStatus>NotPaidOnly</PaidStatus>
 </BillQueryRq>`
   );
@@ -106,7 +114,40 @@ export function queryTransactions(
   );
 }
 
+export function queryChecks(opts: {
+  fromDate?: Date;
+  toDate?: Date;
+  refNumber?: string;
+}): string {
+  const dateFilter =
+    opts.fromDate && opts.toDate
+      ? `<ModifiedDateRangeFilter>
+    <FromModifiedDate>${formatDate(opts.fromDate)}</FromModifiedDate>
+    <ToModifiedDate>${formatDate(opts.toDate)}</ToModifiedDate>
+  </ModifiedDateRangeFilter>`
+      : "";
+  const refFilter = opts.refNumber
+    ? `<RefNumber>${escapeXml(opts.refNumber)}</RefNumber>`
+    : "";
+  return wrapRequest(
+    "13.0",
+    `<CheckQueryRq requestID="1">
+  ${dateFilter}
+  ${refFilter}
+</CheckQueryRq>`
+  );
+}
+
+export function hostQuery(): string {
+  return wrapRequest(
+    "13.0",
+    `<HostQueryRq requestID="1">
+</HostQueryRq>`
+  );
+}
+
 // ── Receive Payment (credit → invoice) ──
+// Validated: works on QB Enterprise 24
 
 export function receivePayment(opts: {
   customerListId: string;
@@ -159,7 +200,6 @@ export function billPayment(opts: {
       <ListID>${escapeXml(opts.vendorListId)}</ListID>
     </PayeeEntityRef>
     <TxnDate>${formatDate(opts.date)}</TxnDate>
-    ${opts.refNumber ? `<RefNumber>${escapeXml(opts.refNumber)}</RefNumber>` : ""}
     ${opts.memo ? `<Memo>${escapeXml(opts.memo)}</Memo>` : ""}
     <BankAccountRef>
       <ListID>${escapeXml(opts.bankAccountListId)}</ListID>
@@ -174,6 +214,7 @@ export function billPayment(opts: {
 }
 
 // ── Create Bill (new expense against vendor) ──
+// Validated: works on QB Enterprise 24
 
 export function addBill(opts: {
   vendorListId: string;
@@ -198,7 +239,6 @@ export function addBill(opts: {
         <ListID>${escapeXml(opts.expenseAccountListId)}</ListID>
       </AccountRef>
       <Amount>${Math.abs(opts.amount).toFixed(2)}</Amount>
-      ${opts.memo ? `<Memo>${escapeXml(opts.memo)}</Memo>` : ""}
     </ExpenseLineAdd>
   </BillAdd>
 </BillAddRq>`
@@ -206,6 +246,7 @@ export function addBill(opts: {
 }
 
 // ── Add Vendor ──
+// Validated: works on QB Enterprise 24
 
 export function addVendor(opts: {
   name: string;
@@ -231,7 +272,6 @@ export function addDeposit(opts: {
   amount: number;
   memo: string;
   refNumber?: string;
-  cleared?: boolean;
 }): string {
   return wrapRequest(
     "13.0",
@@ -243,20 +283,59 @@ export function addDeposit(opts: {
     <TxnDate>${formatDate(opts.date)}</TxnDate>
     ${opts.refNumber ? `<RefNumber>${escapeXml(opts.refNumber)}</RefNumber>` : ""}
     <Memo>${escapeXml(opts.memo)}</Memo>
-    ${opts.cleared !== false ? "<ClearedStatus>Cleared</ClearedStatus>" : ""}
     <DepositLineAdd>
-      <AccountRef>
-        <ListID>${escapeXml(opts.incomeAccountListId)}</ListID>
-      </AccountRef>
-      <Amount>${opts.amount.toFixed(2)}</Amount>
-      <Memo>${escapeXml(opts.memo)}</Memo>
+      <ORDepositLineAdd>
+        <DepositInfo>
+          <AccountRef>
+            <ListID>${escapeXml(opts.incomeAccountListId)}</ListID>
+          </AccountRef>
+          <Amount>${opts.amount.toFixed(2)}</Amount>
+        </DepositInfo>
+      </ORDepositLineAdd>
     </DepositLineAdd>
   </DepositAdd>
 </DepositAddRq>`
   );
 }
 
+// ── Journal Entry (fallback for deposits if DepositAdd is restricted) ──
+// Validated: works on QB Enterprise 24
+
+export function addJournalEntry(opts: {
+  debitAccountListId: string;
+  creditAccountListId: string;
+  date: Date;
+  amount: number;
+  memo?: string;
+  refNumber?: string;
+}): string {
+  return wrapRequest(
+    "13.0",
+    `<JournalEntryAddRq requestID="1">
+  <JournalEntryAdd>
+    <TxnDate>${formatDate(opts.date)}</TxnDate>
+    ${opts.refNumber ? `<RefNumber>${escapeXml(opts.refNumber)}</RefNumber>` : ""}
+    <JournalDebitLine>
+      <AccountRef>
+        <ListID>${escapeXml(opts.debitAccountListId)}</ListID>
+      </AccountRef>
+      <Amount>${opts.amount.toFixed(2)}</Amount>
+      ${opts.memo ? `<Memo>${escapeXml(opts.memo)}</Memo>` : ""}
+    </JournalDebitLine>
+    <JournalCreditLine>
+      <AccountRef>
+        <ListID>${escapeXml(opts.creditAccountListId)}</ListID>
+      </AccountRef>
+      <Amount>${opts.amount.toFixed(2)}</Amount>
+      ${opts.memo ? `<Memo>${escapeXml(opts.memo)}</Memo>` : ""}
+    </JournalCreditLine>
+  </JournalEntryAdd>
+</JournalEntryAddRq>`
+  );
+}
+
 // ── Check / Expense (unmatched debit, no bill) ──
+// Validated: works on QB Enterprise 24
 
 export function addCheck(opts: {
   bankAccountListId: string;
@@ -266,7 +345,6 @@ export function addCheck(opts: {
   payee?: string;
   memo: string;
   refNumber?: string;
-  cleared?: boolean;
 }): string {
   return wrapRequest(
     "13.0",
@@ -279,16 +357,47 @@ export function addCheck(opts: {
     <TxnDate>${formatDate(opts.date)}</TxnDate>
     ${opts.refNumber ? `<RefNumber>${escapeXml(opts.refNumber)}</RefNumber>` : ""}
     <Memo>${escapeXml(opts.memo)}</Memo>
-    ${opts.cleared !== false ? "<ClearedStatus>Cleared</ClearedStatus>" : ""}
     <ExpenseLineAdd>
       <AccountRef>
         <ListID>${escapeXml(opts.expenseAccountListId)}</ListID>
       </AccountRef>
       <Amount>${Math.abs(opts.amount).toFixed(2)}</Amount>
-      <Memo>${escapeXml(opts.memo)}</Memo>
     </ExpenseLineAdd>
   </CheckAdd>
 </CheckAddRq>`
+  );
+}
+
+// ── Sales Receipt (alternative for unmatched credits) ──
+// Validated: works on QB Enterprise 24
+
+export function addSalesReceipt(opts: {
+  customerListId: string;
+  bankAccountListId: string;
+  date: Date;
+  amount: number;
+  memo?: string;
+  refNumber?: string;
+}): string {
+  return wrapRequest(
+    "13.0",
+    `<SalesReceiptAddRq requestID="1">
+  <SalesReceiptAdd>
+    <CustomerRef>
+      <ListID>${escapeXml(opts.customerListId)}</ListID>
+    </CustomerRef>
+    <TxnDate>${formatDate(opts.date)}</TxnDate>
+    ${opts.refNumber ? `<RefNumber>${escapeXml(opts.refNumber)}</RefNumber>` : ""}
+    ${opts.memo ? `<Memo>${escapeXml(opts.memo)}</Memo>` : ""}
+    <DepositToAccountRef>
+      <ListID>${escapeXml(opts.bankAccountListId)}</ListID>
+    </DepositToAccountRef>
+    <SalesReceiptLineAdd>
+      <Amount>${opts.amount.toFixed(2)}</Amount>
+      ${opts.memo ? `<Desc>${escapeXml(opts.memo)}</Desc>` : ""}
+    </SalesReceiptLineAdd>
+  </SalesReceiptAdd>
+</SalesReceiptAddRq>`
   );
 }
 
@@ -296,6 +405,7 @@ export function addCheck(opts: {
 
 export function setClearedStatus(
   txnId: string,
+  editSequence: string,
   txnType: QBTxnType,
   cleared: boolean
 ): string {
@@ -306,6 +416,7 @@ export function setClearedStatus(
     `<${modTag} requestID="1">
   <${modBody}>
     <TxnID>${escapeXml(txnId)}</TxnID>
+    <EditSequence>${escapeXml(editSequence)}</EditSequence>
     <ClearedStatus>${cleared ? "Cleared" : "NotCleared"}</ClearedStatus>
   </${modBody}>
 </${modTag}>`
@@ -313,7 +424,7 @@ export function setClearedStatus(
 }
 
 export function batchSetCleared(
-  txns: Array<{ txnId: string; txnType: QBTxnType }>
+  txns: Array<{ txnId: string; editSequence: string; txnType: QBTxnType }>
 ): string {
   let reqId = 1;
   const bodies = txns.map((t) => {
@@ -322,6 +433,7 @@ export function batchSetCleared(
     return `<${modTag} requestID="${reqId++}">
   <${modBody}>
     <TxnID>${escapeXml(t.txnId)}</TxnID>
+    <EditSequence>${escapeXml(t.editSequence)}</EditSequence>
     <ClearedStatus>Cleared</ClearedStatus>
   </${modBody}>
 </${modTag}>`;
@@ -341,23 +453,5 @@ export function queryVATSummary(fromDate: Date, toDate: Date): string {
     <ToReportDate>${formatDate(toDate)}</ToReportDate>
   </ReportPeriod>
 </GeneralSummaryReportQueryRq>`
-  );
-}
-
-export function queryClearedStatus(
-  accountListId: string,
-  fromDate: Date,
-  toDate: Date
-): string {
-  return wrapRequest(
-    "13.0",
-    `<TransactionQueryRq requestID="1">
-  <TransactionModifiedDateRangeFilter>
-    <FromModifiedDate>${formatDate(fromDate)}</FromModifiedDate>
-    <ToModifiedDate>${formatDate(toDate)}</ToModifiedDate>
-  </TransactionModifiedDateRangeFilter>
-  <AccountListID>${escapeXml(accountListId)}</AccountListID>
-  <IncludeRetElement>ClearedStatus</IncludeRetElement>
-</TransactionQueryRq>`
   );
 }
