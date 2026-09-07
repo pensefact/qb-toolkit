@@ -5,6 +5,7 @@ import type { ActionPlan } from "@qb-toolkit/bank-recon";
 import { mockProvider, suggestGLAccount, getGLAccounts } from "./mock-provider.js";
 import { findAccountByNumber } from "./qb-provider.js";
 import type { QBDataProvider } from "./qb-provider.js";
+import { bridgeProvider, isBridgeAvailable } from "./bridge-provider.js";
 
 const BANK_NAMES: Record<string, string> = {
   fnb: "First National Bank",
@@ -20,8 +21,16 @@ let currentPlan: ActionPlan | null = null;
 let activeFilter = "all";
 let currentStep: "upload" | "review" | "categorise" | "confirm" | "done" = "upload";
 
-// Use mock provider until COM bridge is available
-const provider: QBDataProvider = mockProvider;
+// Auto-detect: use real QB bridge if available, otherwise mock data
+let provider: QBDataProvider = mockProvider;
+
+isBridgeAvailable().then((available) => {
+  if (available) {
+    provider = bridgeProvider;
+    const banner = document.getElementById("connection-status");
+    if (banner) banner.textContent = "Connected to QuickBooks Desktop";
+  }
+});
 
 // ── Navigation ──
 

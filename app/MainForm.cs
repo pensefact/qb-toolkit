@@ -131,6 +131,23 @@ namespace QBDesktop
 
         private void HandleQBXML(HttpListenerRequest req, HttpListenerResponse res)
         {
+            // Reject CSRF: require XML content type (browsers can't POST this cross-origin without preflight)
+            string ct = req.ContentType ?? "";
+            if (!ct.Contains("application/xml") && !ct.Contains("text/xml"))
+            {
+                SendJson(res, 415, "{\"error\":\"Content-Type must be application/xml\"}");
+                return;
+            }
+
+            // Reject cross-origin requests
+            string origin = req.Headers["Origin"];
+            string allowed = "http://localhost:" + _port;
+            if (origin != null && origin != allowed)
+            {
+                SendJson(res, 403, "{\"error\":\"Cross-origin request rejected\"}");
+                return;
+            }
+
             string body;
             using (var reader = new StreamReader(req.InputStream, req.ContentEncoding))
             {
@@ -164,18 +181,19 @@ namespace QBDesktop
             string webDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "web");
             string filePath = Path.Combine(webDir, path.TrimStart('/').Replace('/', '\\'));
 
-            if (!File.Exists(filePath))
+            string fullWebDir = Path.GetFullPath(webDir);
+            if (!fullWebDir.EndsWith(Path.DirectorySeparatorChar.ToString()))
+                fullWebDir = fullWebDir + Path.DirectorySeparatorChar;
+            string fullFilePath = Path.GetFullPath(filePath);
+            if (!fullFilePath.StartsWith(fullWebDir, StringComparison.OrdinalIgnoreCase))
             {
-                SendText(res, 404, "Not found");
+                SendText(res, 403, "Forbidden");
                 return;
             }
 
-            // Prevent path traversal
-            string fullWebDir = Path.GetFullPath(webDir);
-            string fullFilePath = Path.GetFullPath(filePath);
-            if (!fullFilePath.StartsWith(fullWebDir))
+            if (!File.Exists(filePath))
             {
-                SendText(res, 403, "Forbidden");
+                SendText(res, 404, "Not found");
                 return;
             }
 
