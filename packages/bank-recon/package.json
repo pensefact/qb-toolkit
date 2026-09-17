@@ -6,8 +6,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --root ../.. packages/bank-recon",
+    "test:watch": "vitest --root ../.. packages/bank-recon"
   },
   "dependencies": {
     "@qb-toolkit/core": "*",

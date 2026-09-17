@@ -2,11 +2,17 @@
   "name": "qb-toolkit",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "QuickBooks Desktop toolkit for South African businesses",
   "workspaces": [
     "packages/*",
     "ui"
   ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "npm run build -w @qb-toolkit/core && npm run build -w @qb-toolkit/bank-recon && npm run build -w @qb-toolkit/eft-generator && npm run build -w @qb-toolkit/sars-integration && npm run build -w @qb-toolkit/ui"
+  },
   "devDependencies": {
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
