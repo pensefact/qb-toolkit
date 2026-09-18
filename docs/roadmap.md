@@ -4,13 +4,14 @@ Derived from the actual state of the code on 2026-09-17 (resurrection pass after
 
 ## 1. Done and tested (green on a Linux dev machine)
 
-Everything in this section is covered by `npm test` (10 files / 71 tests) and `npm run build`.
+Everything in this section is covered by `npm test` (14 files / 121 tests) and `npm run build`.
 
 - **OFX parsing** (`bank-recon/ofx-parser.ts`) — SGML-style OFX 1.x and XML-style OFX 2.x, bank-agnostic. 8 tests.
-- **CSV statement parsers** for FNB, Nedbank, ABSA, Capitec, Standard Bank. FNB (5 tests) and Nedbank (3 tests) have direct coverage; the other three compile and are exercised only through auto-detection tests.
+- **CSV statement parsers** for FNB, Nedbank, ABSA, Capitec, Standard Bank — all five have direct coverage (format detection, date parsing, amount/sign handling, reference extraction, malformed-input behaviour), plus auto-detection tests.
 - **PDF statement parsers** for all five banks — 14 tests, but against synthetic extracted-text fixtures (`PdfText`), not real PDF files.
+- **PDF ingestion** (`bank-recon/pdf-extract.ts: extractPdfText, detectBankFromPdf`) — `extractPdfText` tested against a mocked `pdf-parse`; `detectBankFromPdf` tested against synthetic `PdfText`, not real PDF files.
 - **Bank auto-detection (CSV)** (`detectBank`) — tested for all five banks plus the unknown-format case.
-- **Transaction matching** (`core/matcher.ts: matchTransactions`) — amount/date/description scoring, ambiguity detection, no-double-spend. 6 tests.
+- **Transaction matching** (`core/matcher.ts: matchTransactions, matchInvoices, matchBills`) — amount/date/description scoring, ambiguity detection, no-double-spend. Covers the absolute-value amount comparison in `matchBills` fixed 2026-09-07.
 - **Reconciliation** (`bank-recon/reconciler.ts`) — match summarisation (matched/ambiguous/unmatched counts and amounts). 5 tests.
 - **Action planning** (`bank-recon/action-planner.ts`) — ReceivePayment / BillPayment / CreateExpense / CreateDeposit / ClearExisting actions, confidence gating (`HIGH_CONFIDENCE = 0.8`), review flags. 6 tests.
 - **qbXML generation** (`core/qbxml.ts`) — queries, ReceivePaymentAdd, BillPaymentAdd, CheckAdd, DepositAdd, JournalEntryAdd, SalesReceiptAdd, setClearedStatus/batch, VAT summary. 15 tests, and validated against a live **QuickBooks Enterprise 24 on 2026-09-07** (commit `dad6d86`).
@@ -21,9 +22,7 @@ Everything in this section is covered by `npm test` (10 files / 71 tests) and `n
 
 - **UI (`ui/`)** — builds, and the reconciliation workflow runs against `mock-provider`. The bridge path (`bridge-provider.ts`, auto-detection of a running bridge) was wired on 2026-09-07 but has never been exercised end-to-end against live QuickBooks in a way anyone has recorded. No UI tests at all. Open decisions: is the mock provider a permanent demo mode or scaffolding to remove? Do we want component tests (e.g. Playwright/vitest-browser) before further UI work?
 - **Bridge TypeScript client (`qb-bridge-http/client.ts`, `provider.ts`)** — written, but sits outside every tsconfig, every build, and the vitest include glob. It has never been type-checked. `provider.ts` imports `QBData` from `@qb-toolkit/bank-recon` and qbxml helpers; whether those imports still line up is unknown. Open decisions: move it into a proper workspace package (e.g. `packages/qb-bridge-client/src`) and add it to the build? Keep the HTTP contract versioned alongside `Program.cs`?
-- **`matchInvoices` / `matchBills` (`core/matcher.ts`)** — implemented and used by the UI, but no direct tests (`matcher.test.ts` only covers `matchTransactions`). They are the invoice/bill matching the action planner depends on at runtime. Open decision: test them now (cheap, pure functions) or wait until matching behaviour is next changed?
-- **PDF ingestion path** — parsers are tested, but `extractPdfText` (the `pdf-parse` wrapper) and `detectBankFromPdf` are not, and no fixture is a real bank PDF. Real statements were only exercised manually in the 2026-09-07 session (`e428a77`). Open decision: can we commit redacted real statements (or rendered equivalents) as fixtures, given they contain customer data?
-- **CSV parsers for ABSA, Capitec, Standard Bank** — implemented, compile, no direct tests. Open decision: write fixtures from real exports (same redaction question as PDFs)?
+- **PDF ingestion against real statements** — `extractPdfText` and `detectBankFromPdf` now have direct tests (mocked `pdf-parse`, synthetic `PdfText`), but no fixture is a real bank PDF. Real statements were only exercised manually in the 2026-09-07 session (`e428a77`). Open decision: can we commit redacted real statements (or rendered equivalents) as fixtures, given they contain customer data? Same open decision for the CSV parsers' fixtures — still unresolved, still synthetic-only.
 
 ## 3. Missing entirely
 
@@ -48,7 +47,7 @@ Rule for future sessions: never add mocks or stubs that make these look verified
 
 ## 5. Suggested order of work
 
-1. **Cheap test debt** (no decisions needed): direct tests for `matchInvoices`/`matchBills`, `detectBankFromPdf`, and the three untested CSV parsers using synthetic fixtures.
+1. ~~**Cheap test debt**~~ — done: direct tests for `matchInvoices`/`matchBills`, `extractPdfText`/`detectBankFromPdf`, and the three previously-untested CSV parsers, all using synthetic fixtures.
 2. **CI** (one decision: hosted vs local): a GitHub Actions workflow running `npm install`, `npm test`, `npm run build` on push/PR.
 3. **Bridge TS client into the build** (one decision: new package vs tsconfig include): make `client.ts`/`provider.ts` type-check so the bridge contract cannot silently rot.
 4. **Windows validation session** (needs the machine + QB + a sample company file): build bridge and WinForms app, run the full loop end-to-end, record results in the README validation section.

@@ -52,11 +52,11 @@ The `bank-recon` package handles three input formats:
 |---|---|---|---|
 | FNB | yes | yes | CSV + PDF |
 | Nedbank | yes | yes | CSV + PDF |
-| ABSA | yes | yes | PDF only |
-| Capitec | yes | yes | PDF only |
-| Standard Bank | yes | yes | PDF only |
+| ABSA | yes | yes | CSV + PDF |
+| Capitec | yes | yes | CSV + PDF |
+| Standard Bank | yes | yes | CSV + PDF |
 
-Auto-detection picks the right parser from file content: `detectBank` (CSV) is tested for all five banks; `detectBankFromPdf` exists but is untested. PDF parser tests run against synthetic extracted-text fixtures, not real bank PDFs, and the extraction step itself (`extractPdfText`) is untested — real statements can still expose layout regressions.
+Auto-detection picks the right parser from file content: `detectBank` (CSV) is tested for all five banks; `detectBankFromPdf` is tested against synthetic `PdfText` fixtures. PDF parser tests, and the extraction step itself (`extractPdfText`, tested against a mocked `pdf-parse`), all run against synthetic fixtures, not real bank PDFs — real statements can still expose layout regressions.
 
 ## Architecture
 
@@ -70,7 +70,7 @@ The bridge runs locally on the same machine as QuickBooks. TypeScript packages c
 
 Validated here:
 
-- Cross-package vitest suite green: **10 test files, 71 tests** — OFX/CSV/PDF parsing, bank detection, transaction matching, reconciliation, action planning, qbXML generation, executor request building.
+- Cross-package vitest suite green: **14 test files, 121 tests** — OFX/CSV/PDF parsing, bank detection, PDF text extraction, transaction/invoice/bill matching, reconciliation, action planning, qbXML generation, executor request building.
 - `npm run build` green for all four TS packages and the Vite UI.
 - qbXML builders validated against a live **QuickBooks Enterprise 24 on 2026-09-07** (last session with QuickBooks access).
 
@@ -79,8 +79,7 @@ Not validated:
 - The C# bridge and WinForms connector: never built or run in this environment (need Windows + QuickBooks Desktop + QB SDK).
 - End-to-end flow UI → bridge → QuickBooks: wired on 2026-09-07 but **not re-verified against live QuickBooks since**.
 - `qb-bridge-http/client.ts` and `provider.ts`: not covered by any build, typecheck, or test.
-- `matchInvoices` / `matchBills` in `core/matcher.ts`: no direct tests (only exercised through the UI at runtime).
-- Parsers vs. real statements: tests use sample/synthetic fixtures; only the 2026-09-07 session exercised real SA bank formats, and PDF fixtures are hand-built.
+- Parsers vs. real statements: tests use sample/synthetic fixtures; only the 2026-09-07 session exercised real SA bank formats, and PDF fixtures are hand-built. Whether redacted real statements can be committed as fixtures is still an open decision (see `docs/roadmap.md`).
 
 See [`docs/validation-runbook.md`](docs/validation-runbook.md) for the procedure and evidence template to close the "Not validated" items above on a Windows + QuickBooks Desktop machine.
 
