@@ -82,6 +82,8 @@ Not validated:
 - `matchInvoices` / `matchBills` in `core/matcher.ts`: no direct tests (only exercised through the UI at runtime).
 - Parsers vs. real statements: tests use sample/synthetic fixtures; only the 2026-09-07 session exercised real SA bank formats, and PDF fixtures are hand-built.
 
+See [`docs/validation-runbook.md`](docs/validation-runbook.md) for the procedure and evidence template to close the "Not validated" items above on a Windows + QuickBooks Desktop machine.
+
 ## Tests
 
 ```bash
